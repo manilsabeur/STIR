@@ -97,7 +97,7 @@ ScatterSimulation::process_data()
   info("ScatterSimulator: Running Scatter Simulation ...");
   info("ScatterSimulator: Initialising ...");
 
-  ViewSegmentNumbers vs_num;
+  ViewgramIndices vs_num;
   /* ////////////////// SCATTER ESTIMATION TIME //////////////// */
   CPUTimer bin_timer;
   bin_timer.start();
@@ -128,22 +128,28 @@ ScatterSimulation::process_data()
            vs_num.view_num() <= this->proj_data_info_sptr->get_max_view_num();
            ++vs_num.view_num())
         {
-          total_scatter += this->process_data_for_view_segment_num(vs_num);
-          bin_counter += this->proj_data_info_sptr->get_num_axial_poss(vs_num.segment_num())
-                         * this->proj_data_info_sptr->get_num_tangential_poss();
-          /* ////////////////// SCATTER ESTIMATION TIME //////////////// */
+          for (vs_num.timing_pos_num() = this->proj_data_info_sptr->get_min_tof_pos_num();
+               vs_num.timing_pos_num() <= this->proj_data_info_sptr->get_max_tof_pos_num();
+               ++vs_num.timing_pos_num())
           {
-            wall_clock_timer.stop(); // must be stopped before getting the value
-            info(format("{} / {} bins done. Total time elapsed {:5.2f} secs, remaining about {:5.2f} mins (ignoring caching).",
-                        bin_counter,
-                        total_bins,
-                        wall_clock_timer.value(),
-                        ((wall_clock_timer.value() - previous_timer) * (total_bins - bin_counter)
-                         / (bin_counter - previous_bin_count) / 60)),
-                 /* verbosity level*/ 3);
-            previous_timer = wall_clock_timer.value();
-            previous_bin_count = bin_counter;
-            wall_clock_timer.start();
+            
+            total_scatter += this->process_data_for_view_segment_num(vs_num);
+            bin_counter += this->proj_data_info_sptr->get_num_axial_poss(vs_num.segment_num())
+                          * this->proj_data_info_sptr->get_num_tangential_poss();
+            /* ////////////////// SCATTER ESTIMATION TIME //////////////// */
+            {
+              wall_clock_timer.stop(); // must be stopped before getting the value
+              info(format("{} / {} bins done. Total time elapsed {:5.2f} secs, remaining about {:5.2f} mins (ignoring caching).",
+                          bin_counter,
+                          total_bins,
+                          wall_clock_timer.value(),
+                          ((wall_clock_timer.value() - previous_timer) * (total_bins - bin_counter)
+                          / (bin_counter - previous_bin_count) / 60)),
+                  /* verbosity level*/ 3);
+              previous_timer = wall_clock_timer.value();
+              previous_bin_count = bin_counter;
+              wall_clock_timer.start();
+            }
           }
           /* ////////////////// end SCATTER ESTIMATION TIME //////////////// */
         }
@@ -171,7 +177,8 @@ ScatterSimulation::process_data_for_view_segment_num(const ViewSegmentNumbers& v
   // without having to think about double loops.
   std::vector<Bin> all_bins;
   {
-    Bin bin(vs_num.segment_num(), vs_num.view_num(), 0, 0);
+    // TOF SSS I had to change this part too other wise the Bin wouldn't include the timing_pos_num
+    Bin bin(vs_num.segment_num(), vs_num.view_num(), 0, 0, vs_num.timing_pos_num());
 
     for (bin.axial_pos_num() = this->proj_data_info_sptr->get_min_axial_pos_num(bin.segment_num());
          bin.axial_pos_num() <= this->proj_data_info_sptr->get_max_axial_pos_num(bin.segment_num());
@@ -188,7 +195,8 @@ ScatterSimulation::process_data_for_view_segment_num(const ViewSegmentNumbers& v
 
   // now compute scatter for all bins
   double total_scatter = 0.;
-  Viewgram<float> viewgram = this->output_proj_data_sptr->get_empty_viewgram(vs_num.view_num(), vs_num.segment_num());
+  // TOF SSS I had to change this part too other wise the Viewgram wouldn't include the timing_pos_num
+  Viewgram<float> viewgram = this->output_proj_data_sptr->get_empty_viewgram(ViewgramIndices(vs_num.view_num(), vs_num.segment_num(), vs_num.timing_pos_num()));
 #ifdef STIR_OPENMP
 #  pragma omp parallel for reduction(+ : total_scatter) schedule(dynamic)
 #endif

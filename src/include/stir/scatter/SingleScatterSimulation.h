@@ -65,15 +65,27 @@ protected:
 
   //!
   //! \brief simulate single scatter for one scatter point
-  double simulate_for_one_scatter_point(const std::size_t scatter_point_num, const unsigned det_num_A, const unsigned det_num_B);
+  //! tof_position_mm: measured TOF bin centre in mm for this bin (0 for non-TOF data)
+  double simulate_for_one_scatter_point(const std::size_t scatter_point_num,
+                                        const unsigned det_num_A,
+                                        const unsigned det_num_B,
+                                        const float tof_position_mm);
 
   double scatter_estimate(const Bin& bin) override;
 
-  virtual void actual_scatter_estimate(double& scatter_ratio_singles, const unsigned det_num_A, const unsigned det_num_B);
+  //! tof_position_mm: measured TOF bin centre in mm for this bin (0 for non-TOF data)
+  virtual void actual_scatter_estimate(double& scatter_ratio_singles,
+                                       const unsigned det_num_A,
+                                       const unsigned det_num_B,
+                                       const float tof_position_mm);
 
 private:
   //! larger angles will be ignored
   float max_single_scatter_cos_angle;
+
+  //! sigma of the TOF Gaussian kernel in mm; 0 if the data is non-TOF
+  //! computed once in set_up() from scanner timing resolution (FWHM in ps -> sigma in mm)
+  float tof_sigma_mm;
 };
 
 END_NAMESPACE_STIR

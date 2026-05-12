@@ -328,6 +328,17 @@ protected:
   float integral_over_activity_image_between_scattpoint_det(const CartesianCoordinate3D<float>& scatter_point,
                                                             const CartesianCoordinate3D<float>& detector_coord);
 
+  //! TOF-weighted emission integral from scatter_point to detector_coord (Watson 2007).
+  //! Replaces integral_over_activity_image_between_scattpoint_det for TOF data.
+  //! tof_shift = k_STIR + (R_SB - R_SA)/2  (caller computes this)
+  //! sign_s: +1 for I^A (kernel = Gaussian(tof_shift + s)), -1 for I^B (kernel = Gaussian(tof_shift - s))
+  //! The Gaussian kernel is integrated exactly over each voxel segment using erf.
+  float tof_weighted_integral_over_activity_image_between_scattpoint_det(const CartesianCoordinate3D<float>& scatter_point,
+                                                                         const CartesianCoordinate3D<float>& detector_coord,
+                                                                         const float tof_shift,
+                                                                         const float sign_s,
+                                                                         const float tof_sigma_mm);
+
   float cached_integral_over_activity_image_between_scattpoint_det(const unsigned scatter_point_num, const unsigned det_num);
 
   float cached_exp_integral_over_attenuation_image_between_scattpoint_det(const unsigned scatter_point_num,

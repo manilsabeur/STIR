@@ -37,7 +37,8 @@ static const float total_Compton_cross_section_511keV = ScatterSimulation::total
 double
 SingleScatterSimulation::simulate_for_one_scatter_point(const std::size_t scatter_point_num,
                                                         const unsigned det_num_A,
-                                                        const unsigned det_num_B)
+                                                        const unsigned det_num_B,
+                                                        const float tof_position_mm)
 {
   if (this->max_single_scatter_cos_angle <= 0.F) // set to negative value by set_up(), so recompute
     {
@@ -63,19 +64,58 @@ SingleScatterSimulation::simulate_for_one_scatter_point(const std::size_t scatte
   if (detection_efficiency_scatter == 0)
     return 0;
 
-  const float emiss_to_detA
-      = cached_integral_over_activity_image_between_scattpoint_det(static_cast<unsigned int>(scatter_point_num), det_num_A);
-  const float emiss_to_detB
-      = cached_integral_over_activity_image_between_scattpoint_det(static_cast<unsigned int>(scatter_point_num), det_num_B);
+  // Distances from scatter point S to each detector in mm.
+  // R_SA and R_SB are the primary quantities; rA_squared and rB_squared are derived.
+  // Placed before emission integrals because both TOF (tof_shift) and scatter_ratio (1/r²) need them.
+  const float R_SA = static_cast<float>(norm(scatter_point - detector_coord_A));
+  const float R_SB = static_cast<float>(norm(scatter_point - detector_coord_B));
+  const float rA_squared = R_SA * R_SA;
+  const float rB_squared = R_SB * R_SB;
+
+  // ===== TOF MODIFICATION 3/3: CORE CHANGE (Watson 2007) =====
+  // Non-TOF: emiss = (1/R_S?²) x integral_S^det  lambda(s) ds           (cached)
+  // TOF:     emiss = (1/R_S?²) x integral_S^det  eps_t[...] lambda(s) ds (not cached)
+  //
+  // The TOF kernel eps_t for a source at distance s from S along the ray:
+  //   I^A: eps_t = Gaussian( tof_shift + s , sigma_tof )
+  //   I^B: eps_t = Gaussian( tof_shift - s , sigma_tof )
+  // where tof_shift = k_STIR + (R_SB - R_SA)/2
+  //
+  // The attenuation integrals (atten_to_detA/B) and all other terms are unchanged.
+  float emiss_to_detA, emiss_to_detB;
+
+  if (this->tof_sigma_mm > 0.f)
+    {
+      // tof_shift: shifts the Gaussian kernel along the ray to match the measured TOF bin.
+      // Derivation: k_expected^A(s) = (R_SA - R_SB)/2 - s  =>  kernel arg = k - k_expected = tof_shift + s
+      //
+      // STIR convention: find_cartesian_coordinates_given_scanner_coordinates swaps coord_1/coord_2
+      // when timing_pos_num < 0 (line: if (tpos < 0) std::swap(coord_1, coord_2)).
+      // After the swap, detector_coord_A = canonical_det2 and detector_coord_B = canonical_det1,
+      // so k_scatter_sim = c/2*(t_A - t_B) = -k_STIR = |tof_position_mm|.
+      // Using std::abs() handles both cases: no-swap (tof_pos > 0) and swap (tof_pos < 0).
+      const float tof_shift = std::abs(tof_position_mm) + (R_SB - R_SA) / 2.f;
+      emiss_to_detA = tof_weighted_integral_over_activity_image_between_scattpoint_det(
+          scatter_point, detector_coord_A, tof_shift, +1.f, this->tof_sigma_mm);
+      emiss_to_detB = tof_weighted_integral_over_activity_image_between_scattpoint_det(
+          scatter_point, detector_coord_B, tof_shift, -1.f, this->tof_sigma_mm);
+    }
+  else
+    {
+      // Non-TOF: use the precomputed cached integrals (unchanged path)
+      emiss_to_detA = cached_integral_over_activity_image_between_scattpoint_det(
+          static_cast<unsigned int>(scatter_point_num), det_num_A);
+      emiss_to_detB = cached_integral_over_activity_image_between_scattpoint_det(
+          static_cast<unsigned int>(scatter_point_num), det_num_B);
+    }
+
   if (emiss_to_detA == 0 && emiss_to_detB == 0)
     return 0;
+
   const float atten_to_detA = cached_exp_integral_over_attenuation_image_between_scattpoint_det(scatter_point_num, det_num_A);
   const float atten_to_detB = cached_exp_integral_over_attenuation_image_between_scattpoint_det(scatter_point_num, det_num_B);
 
   const float dif_Compton_cross_section_value = dif_Compton_cross_section(costheta, 511.F);
-
-  const float rA_squared = static_cast<float>(norm_squared(scatter_point - detector_coord_A));
-  const float rB_squared = static_cast<float>(norm_squared(scatter_point - detector_coord_B));
 
   const float scatter_point_mu = scatt_points_vector[scatter_point_num].mu_value;
 
@@ -96,7 +136,8 @@ SingleScatterSimulation::simulate_for_one_scatter_point(const std::size_t scatte
 #endif
 
   double scatter_ratio = 0;
-
+  // ===== THIS BLOCK IS UNCHANGED BY TOF =====
+  // The TOF modification is entirely inside emiss_to_detA and emiss_to_detB above.
   scatter_ratio
       = (emiss_to_detA * (1. / rB_squared) * pow(atten_to_detB, total_Compton_cross_section_relative_to_511keV(new_energy) - 1)
          + emiss_to_detB * (1. / rA_squared) * pow(atten_to_detA, total_Compton_cross_section_relative_to_511keV(new_energy) - 1))

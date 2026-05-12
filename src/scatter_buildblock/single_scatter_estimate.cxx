@@ -30,7 +30,14 @@ SingleScatterSimulation::scatter_estimate(const Bin& bin)
 
   this->find_detectors(det_num_A, det_num_B, bin);
 
-  this->actual_scatter_estimate(scatter_ratio_singles, det_num_A, det_num_B);
+  // TOF MODIFICATION 1/3: extract the measured TOF bin centre in mm for this bin.
+  // For non-TOF data is_tof_data() is false and we pass 0 (the kernel then has no effect).
+  // get_k(bin) returns k = c/2 * (t_A - t_B) in mm (positive when event is closer to B).
+  const float tof_position_mm = this->proj_data_info_sptr->is_tof_data()
+      ? this->proj_data_info_sptr->get_k(bin)
+      : 0.f;
+
+  this->actual_scatter_estimate(scatter_ratio_singles, det_num_A, det_num_B, tof_position_mm);
 
   return scatter_ratio_singles;
 }
@@ -38,14 +45,16 @@ SingleScatterSimulation::scatter_estimate(const Bin& bin)
 void
 SingleScatterSimulation::actual_scatter_estimate(double& scatter_ratio_singles,
                                                  const unsigned det_num_A,
-                                                 const unsigned det_num_B)
+                                                 const unsigned det_num_B,
+                                                 const float tof_position_mm)
 {
-
+  // TOF MODIFICATION 2/3: tof_position_mm is forwarded unchanged to each scatter point.
+  // The outer integral (sum over scatter points, division by sigma_c and efficiency) is unchanged.
   scatter_ratio_singles = 0;
 
   for (std::size_t scatter_point_num = 0; scatter_point_num < this->scatt_points_vector.size(); ++scatter_point_num)
     {
-      scatter_ratio_singles += simulate_for_one_scatter_point(scatter_point_num, det_num_A, det_num_B);
+      scatter_ratio_singles += simulate_for_one_scatter_point(scatter_point_num, det_num_A, det_num_B, tof_position_mm);
     }
 
   // we will divide by the effiency of the detector pair for unscattered photons

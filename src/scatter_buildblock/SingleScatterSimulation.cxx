@@ -8,6 +8,7 @@
 */
 #include "stir/scatter/SingleScatterSimulation.h"
 #include "stir/error.h"
+#include "stir/TOF_conversions.h"
 
 START_NAMESPACE_STIR
 
@@ -65,7 +66,25 @@ SingleScatterSimulation::set_up()
   // set to negative value such that this will be recomputed
   this->max_single_scatter_cos_angle = -1.F;
 
-  return base_type::set_up();
+  if (base_type::set_up() == Succeeded::no)
+    return Succeeded::no;
+
+  // Compute sigma of TOF Gaussian kernel in mm.
+  // timing_resolution() gives the FWHM in ps.
+  // Convert: sigma_mm = FWHM_ps * (c/2 in mm/ps) / 2.35482
+  // where 2.35482 = 2*sqrt(2*ln2) converts FWHM to sigma.
+  if (this->proj_data_info_sptr->is_tof_data())
+    {
+      const float tof_fwhm_ps = this->proj_data_info_sptr->get_scanner_ptr()->get_timing_resolution();
+      this->tof_sigma_mm = tof_fwhm_ps * static_cast<float>(speed_of_light_in_mm_per_ps_div2) / 2.35482f;
+    }
+  else
+    {
+      this->tof_sigma_mm = 0.f;
+    }
+
+
+  return Succeeded::yes;
 }
 
 Succeeded
