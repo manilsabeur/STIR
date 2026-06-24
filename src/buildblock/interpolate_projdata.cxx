@@ -36,6 +36,7 @@
 #include "stir/numerics/sampling_functions.h"
 #include "stir/error.h"
 #include <typeinfo>
+#include <iostream>
 
 START_NAMESPACE_STIR
 
@@ -196,15 +197,15 @@ interpolate_projdata(ProjData& proj_data_out,
   if (proj_data_in_info.get_scanner_sptr()->get_scanner_geometry() != "Cylindrical")
     return interpolate_blocks_on_cylindrical_projdata(proj_data_out, proj_data_in, remove_interleaving);
 
-  // initialise interpolator
-  BSpline::BSplinesRegularGrid<3, float, float> proj_data_interpolator(these_types);
   for (int k = proj_data_out_info.get_min_tof_pos_num(); k <= proj_data_out_info.get_max_tof_pos_num(); ++k)
     {
+      // Declare inside the loop: set_coef() is not designed for repeated calls on the same object
+      // (heap corruption occurs when iterating over multiple TOF bins with the same instance).
+      BSpline::BSplinesRegularGrid<3, float, float> proj_data_interpolator(these_types);
       SegmentBySinogram<float> segment
           = remove_interleaving ? make_non_interleaved_segment(*(make_non_interleaved_proj_data_info(proj_data_in_info)),
                                                                proj_data_in.get_segment_by_sinogram(0, k))
                                 : proj_data_in.get_segment_by_sinogram(0, k);
-
       // for Cylindrical, spacing is regular in all directions, which makes mapping trivial
       std::function<BasicCoordinate<3, double>(const BasicCoordinate<3, int>&)> index_converter;
       // especially in view direction, extending by 5 leads to much smaller artifacts
@@ -245,6 +246,7 @@ interpolate_projdata(ProjData& proj_data_out,
 
       if (proj_data_out.set_segment(sino_3D_out) == Succeeded::no)
         return Succeeded::no;
+      sino_3D_out.recycle();
     }
   return Succeeded::yes;
 }

@@ -42,9 +42,14 @@
 #include "stir/recon_buildblock/ProjMatrixByBinUsingRayTracing.h"
 #include "stir/recon_buildblock/ForwardProjectorByBinUsingProjMatrixByBin.h"
 #include "stir/scatter/SingleScatterSimulation.h"
+#include "stir/scatter/ScatterEstimation.h"
+#include "stir/recon_buildblock/TrivialBinNormalisation.h"
+#include "stir/Sinogram.h"
 #include "stir/format.h"
 
 #include "stir/RunTests.h"
+
+#include <cmath>
 
 START_NAMESPACE_STIR
 
@@ -60,6 +65,13 @@ private:
   void scatter_interpolation_test_cyl_asymmetric();
   void scatter_interpolation_test_blocks_downsampled();
   void transaxial_upsampling_interpolation_test_blocks();
+
+  // TOF upsampling/tail-fitting tests — exercise the TOF correctness of
+  // ScatterEstimation::upsample_and_fit_scatter_estimate, inverse_SSRB and
+  // scale_sinograms (fixes validated 2024/2026).
+  void upsample_tof_all_bins_populated();
+  void tof_sum_consistent_with_nontof();
+  void tof_tail_fitting_scales_all_bins();
 
   void check_symmetry(const SegmentBySinogram<float>& segment);
   void compare_segment(const SegmentBySinogram<float>& segment1, const SegmentBySinogram<float>& segment2, float maxDiff);
@@ -219,6 +231,209 @@ make_symmetric_object(VoxelsOnCartesianGrid<float>& emission_map)
   cylinder.construct_volume(emission_map, CartesianCoordinate3D<int>(1, 1, 1));
 }
 
+// ── Helpers for the TOF upsampling/tail-fitting tests ────────────────────────
+
+static shared_ptr<ExamInfo>
+make_tof_exam_info()
+{
+  auto tfd = TimeFrameDefinitions();
+  tfd.set_num_time_frames(1);
+  tfd.set_time_frame(1, 0, 1e9);
+  auto ei = std::make_shared<ExamInfo>();
+  ei->set_high_energy_thres(650);
+  ei->set_low_energy_thres(425);
+  ei->set_time_frame_definitions(tfd);
+  return ei;
+}
+
+// Build a TOF ProjDataInfo on E966, segment 0 only (max_delta=0), TOF enabled.
+static shared_ptr<ProjDataInfo>
+make_e966_tof_pdi(int num_tof_bins, float timing_res_ps)
+{
+  auto scanner_sptr = std::make_shared<Scanner>(Scanner::E966);
+  scanner_sptr->set_timing_resolution(timing_res_ps);
+  scanner_sptr->set_max_num_timing_poss(num_tof_bins);
+  scanner_sptr->set_size_of_timing_poss(timing_res_ps);
+  auto pdi = shared_ptr<ProjDataInfo>(ProjDataInfo::construct_proj_data_info(
+      scanner_sptr, 1, 0, scanner_sptr->get_num_detectors_per_ring() / 6, 150, false));
+  pdi->set_tof_mash_factor(1);
+  return pdi;
+}
+
+// Forward-project a small cylinder (z_fraction planes) onto pdi.
+static shared_ptr<ProjDataInMemory>
+fwd_project_tof_cylinder(const shared_ptr<ProjDataInfo>& pdi,
+                         const shared_ptr<ExamInfo>& ei,
+                         float z_fraction = 4.5F)
+{
+  auto img = std::make_shared<VoxelsOnCartesianGrid<float>>(*pdi, 1.F);
+  const float dz = img->get_grid_spacing()[1];
+  const float zc = (img->get_min_z() + img->get_max_z()) / 2.F * dz;
+  EllipsoidalCylinder cyl(dz * z_fraction, 60, 60, CartesianCoordinate3D<float>(zc, 0, 0));
+  cyl.construct_volume(*img, CartesianCoordinate3D<int>(1, 1, 1));
+
+  auto pm = ProjMatrixByBinUsingRayTracing();
+  pm.set_use_actual_detector_boundaries(true);
+  pm.enable_cache(false);
+  auto fwd = ForwardProjectorByBinUsingProjMatrixByBin(std::make_shared<ProjMatrixByBinUsingRayTracing>(pm));
+  fwd.set_up(pdi, img);
+
+  auto sino = std::make_shared<ProjDataInMemory>(ei, pdi);
+  sino->fill(0.F);
+  fwd.forward_project(*sino, *img);
+  return sino;
+}
+
+// Sum all TOF bins and segments.
+static double
+tof_total(const ProjData& pd)
+{
+  const ProjDataInfo& info = *pd.get_proj_data_info_sptr();
+  double s = 0.;
+  for (int seg = info.get_min_segment_num(); seg <= info.get_max_segment_num(); ++seg)
+    for (int k = info.get_min_tof_pos_num(); k <= info.get_max_tof_pos_num(); ++k)
+      s += pd.get_segment_by_sinogram(seg, k).sum();
+  return s;
+}
+
+void
+InterpolationTests::upsample_tof_all_bins_populated()
+{
+  info("TOF upsample: all TOF bins populated after upsample_and_fit");
+  const int N = 7;
+  const float res = 500.F;
+  auto ei = make_tof_exam_info();
+
+  auto pdi_full = make_e966_tof_pdi(N, res);
+  check(pdi_full->is_tof_data(), "full pdi should be TOF");
+  check_if_equal(pdi_full->get_num_tof_poss(), N, "wrong number of TOF positions");
+
+  auto pdi_ds = make_e966_tof_pdi(N, res);
+  pdi_ds->reduce_segment_range(0, 0);
+
+  auto scatter_ds = fwd_project_tof_cylinder(pdi_ds, ei);
+  for (int k = pdi_ds->get_min_tof_pos_num(); k <= pdi_ds->get_max_tof_pos_num(); ++k)
+    check(scatter_ds->get_segment_by_sinogram(0, k).sum() > 0,
+          format("input scatter TOF bin {} is all-zero", k));
+
+  auto out = std::make_shared<ProjDataInMemory>(ei, pdi_full);
+  out->fill(0.F);
+  auto weights = std::make_shared<ProjDataInMemory>(ei, pdi_full);
+  weights->fill(1.F);
+  TrivialBinNormalisation norm;
+
+  ScatterEstimation::upsample_and_fit_scatter_estimate(*out, *out, *scatter_ds, norm, *weights, 1.F, 1.F, 5);
+
+  for (int k = pdi_full->get_min_tof_pos_num(); k <= pdi_full->get_max_tof_pos_num(); ++k)
+    check(out->get_segment_by_sinogram(0, k).sum() > 0,
+          format("upsampled scatter TOF bin {} is all-zero (without the fix only bin 0 survives)", k));
+}
+
+void
+InterpolationTests::tof_sum_consistent_with_nontof()
+{
+  info("TOF upsample: TOF-summed total consistent with non-TOF upsample (<5%)");
+  const int N = 7;
+  const float res = 500.F;
+  auto ei = make_tof_exam_info();
+
+  auto pdi_full_tof  = make_e966_tof_pdi(N, res);
+  auto pdi_full_ntof = pdi_full_tof->create_non_tof_clone();
+  auto pdi_ds_tof    = make_e966_tof_pdi(N, res);
+  pdi_ds_tof->reduce_segment_range(0, 0);
+  auto pdi_ds_ntof = pdi_ds_tof->create_non_tof_clone();
+
+  auto sc_tof = fwd_project_tof_cylinder(pdi_ds_tof, ei);
+
+  // non-TOF scatter = sum of TOF bins, sinogram by sinogram
+  auto sc_ntof = std::make_shared<ProjDataInMemory>(ei, pdi_ds_ntof);
+  sc_ntof->fill(0.F);
+  for (int ax = pdi_ds_ntof->get_min_axial_pos_num(0); ax <= pdi_ds_ntof->get_max_axial_pos_num(0); ++ax)
+    {
+      Sinogram<float> sum = sc_ntof->get_sinogram(ax, 0);
+      for (int k = pdi_ds_tof->get_min_tof_pos_num(); k <= pdi_ds_tof->get_max_tof_pos_num(); ++k)
+        sum += sc_tof->get_sinogram(ax, 0, false, k);
+      sc_ntof->set_sinogram(sum);
+    }
+
+  auto out_tof = std::make_shared<ProjDataInMemory>(ei, pdi_full_tof);
+  out_tof->fill(0.F);
+  auto w_tof = std::make_shared<ProjDataInMemory>(ei, pdi_full_tof);
+  w_tof->fill(1.F);
+  TrivialBinNormalisation norm_tof;
+  ScatterEstimation::upsample_and_fit_scatter_estimate(*out_tof, *out_tof, *sc_tof, norm_tof, *w_tof, 1.F, 1.F, 5);
+
+  auto out_ntof = std::make_shared<ProjDataInMemory>(ei, pdi_full_ntof);
+  out_ntof->fill(0.F);
+  auto w_ntof = std::make_shared<ProjDataInMemory>(ei, pdi_full_ntof);
+  w_ntof->fill(1.F);
+  TrivialBinNormalisation norm_ntof;
+  ScatterEstimation::upsample_and_fit_scatter_estimate(*out_ntof, *out_ntof, *sc_ntof, norm_ntof, *w_ntof, 1.F, 1.F, 5);
+
+  const double sum_tof  = tof_total(*out_tof);
+  const double sum_ntof = tof_total(*out_ntof);
+  const double rel_diff = std::abs(sum_tof - sum_ntof) / (sum_ntof + 1e-10);
+  info(format("TOF total={} non-TOF total={} rel_diff={}", sum_tof, sum_ntof, rel_diff));
+  check(rel_diff < 0.05,
+        format("TOF/non-TOF totals differ by {:.1f}% (>5%): some TOF bins may have been dropped", rel_diff * 100));
+}
+
+void
+InterpolationTests::tof_tail_fitting_scales_all_bins()
+{
+  info("TOF tail-fitting: scale factor alpha recovered on every TOF bin");
+  const int N = 7;
+  const float res = 500.F;
+  const float alpha = 3.F;
+  const double tol = 0.05;
+  auto ei = make_tof_exam_info();
+
+  auto pdi_full = make_e966_tof_pdi(N, res);
+  auto pdi_ds   = make_e966_tof_pdi(N, res);
+  pdi_ds->reduce_segment_range(0, 0);
+
+  auto sc_ds = fwd_project_tof_cylinder(pdi_ds, ei);
+
+  // reference scatter (trivial upsample, scale=1)
+  auto sc_ref = std::make_shared<ProjDataInMemory>(ei, pdi_full);
+  sc_ref->fill(0.F);
+  auto w_ref = std::make_shared<ProjDataInMemory>(ei, pdi_full);
+  w_ref->fill(1.F);
+  TrivialBinNormalisation norm_ref;
+  ScatterEstimation::upsample_and_fit_scatter_estimate(*sc_ref, *sc_ref, *sc_ds, norm_ref, *w_ref, 1.F, 1.F, 5);
+  check(tof_total(*sc_ref) > 0, "reference scatter is all-zero before tail-fitting test");
+
+  // emission = alpha * sc_ref
+  auto emission = std::make_shared<ProjDataInMemory>(ei, pdi_full);
+  for (int ax = pdi_full->get_min_axial_pos_num(0); ax <= pdi_full->get_max_axial_pos_num(0); ++ax)
+    for (int k = pdi_full->get_min_tof_pos_num(); k <= pdi_full->get_max_tof_pos_num(); ++k)
+      {
+        Sinogram<float> s = sc_ref->get_sinogram(ax, 0, false, k);
+        s *= alpha;
+        emission->set_sinogram(s);
+      }
+
+  // tail-fitting: min != max → scale_factors branch; half_filter_width=0 avoids
+  // boxcar dilution on the ~4-plane cylinder
+  auto out = std::make_shared<ProjDataInMemory>(ei, pdi_full);
+  out->fill(0.F);
+  auto w = std::make_shared<ProjDataInMemory>(ei, pdi_full);
+  w->fill(1.F);
+  TrivialBinNormalisation norm;
+  ScatterEstimation::upsample_and_fit_scatter_estimate(*out, *emission, *sc_ds, norm, *w, 0.1F, 10.F, 0);
+
+  for (int k = pdi_full->get_min_tof_pos_num(); k <= pdi_full->get_max_tof_pos_num(); ++k)
+    {
+      const double expected = sc_ref->get_segment_by_sinogram(0, k).sum() * alpha;
+      const double got      = out->get_segment_by_sinogram(0, k).sum();
+      const double rel_err  = std::abs(got - expected) / (expected + 1e-10);
+      check(rel_err < tol,
+            format("TOF bin {}: expected~{:.2f} (alpha*ref), got {:.2f} (rel_err={:.3f}); "
+                   "without the scale_sinograms TOF fix bins 1..N-1 would be zero",
+                   k, expected, got, rel_err));
+    }
+}
+
 void
 InterpolationTests::scatter_interpolation_test_blocks()
 {
@@ -375,7 +590,7 @@ InterpolationTests::scatter_interpolation_test_cyl()
                                      int(150 * 64 / 192),
                                      127,
                                      4.3,
-                                     20.0,
+                                     8.0,
                                      133 * 3.14 / 64,
                                      -0.38956 /* 0.0 */,
                                      1,
@@ -391,9 +606,9 @@ InterpolationTests::scatter_interpolation_test_cyl()
                                      01.F,
                                      -1.F,
                                      "Cylindrical",
-                                     20.0,
+                                     8.0,
                                      12.0,
-                                     120.0,
+                                     48.0,
                                      72.0);
 
   auto proj_data_info = shared_ptr<ProjDataInfo>(
@@ -962,6 +1177,9 @@ InterpolationTests::run_tests()
   scatter_interpolation_test_cyl_asymmetric();
   scatter_interpolation_test_blocks_downsampled();
   transaxial_upsampling_interpolation_test_blocks();
+  upsample_tof_all_bins_populated();
+  tof_sum_consistent_with_nontof();
+  tof_tail_fitting_scales_all_bins();
 }
 
 END_NAMESPACE_STIR

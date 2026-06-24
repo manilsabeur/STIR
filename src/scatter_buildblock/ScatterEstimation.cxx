@@ -497,7 +497,7 @@ ScatterEstimation::set_up()
     error("ScatterEstimation: Please define a scatter simulation method. Aborting.");
 
   if (!run_in_2d_projdata)
-    error("ScatterEstimation: Currently, only running the estimation in 2D is supported.");
+    warning("ScatterEstimation: Running in 3D/TOF mode (experimental).");
 
   if (!this->recompute_mask_projdata)
     {
@@ -1060,8 +1060,34 @@ ScatterEstimation::process_data()
             }
           else
             {
-              scatter_estimate_sptr = scaled_est_projdata_sptr;
+              if (!this->output_scatter_estimate_prefix.empty())
+                {
+                  std::stringstream convert;
+                  convert << this->output_scatter_estimate_prefix << "_" << i_scat_iter;
+                  std::string output_scatter_filename = convert.str();
+                  scatter_estimate_sptr.reset(new ProjDataInterfile(this->input_projdata_sptr->get_exam_info_sptr(),
+                                                                    this->input_projdata_sptr->get_proj_data_info_sptr(),
+                                                                    output_scatter_filename,
+                                                                    std::ios::in | std::ios::out | std::ios::trunc));
+                  scatter_estimate_sptr->fill(*scaled_est_projdata_sptr);
+                }
+              else
+                {
+                  scatter_estimate_sptr = scaled_est_projdata_sptr;
+                }
             }
+
+          // Re-set-up multiplicative norm with the original TOF geometry.
+          // reconstruct_iterative() internally calls normalisation->set_up() with
+          // non-TOF sensitivity geometry (sens_proj_data_info_sptr), which overwrites
+          // the TOF projdata_info stored by BinNormalisation. Without this reset, the
+          // second iteration's apply() call fails the geometry check.
+          if (!is_null_ptr(this->multiplicative_binnorm_sptr))
+            this->multiplicative_binnorm_sptr->set_up(this->input_projdata_sptr->get_exam_info_sptr(),
+                                                      this->input_projdata_sptr->get_proj_data_info_sptr());
+          if (!is_null_ptr(this->multiplicative_binnorm_2d_sptr))
+            this->multiplicative_binnorm_2d_sptr->set_up(this->input_projdata_2d_sptr->get_exam_info_sptr(),
+                                                         this->input_projdata_2d_sptr->get_proj_data_info_sptr());
 
           if (!this->output_additive_estimate_prefix.empty())
             {
@@ -1102,8 +1128,10 @@ ScatterEstimation::process_data()
         }
       else
         {
-          // TODO restructure code to move additive_projdata code from above
-          error("ScatterEstimation: You should not be here. This is not 2D.");
+          this->add_projdata_sptr->fill(*scaled_est_projdata_sptr);
+          if (!is_null_ptr(this->back_projdata_sptr))
+            add_proj_data(*this->add_projdata_sptr, *this->back_projdata_sptr);
+          this->multiplicative_binnorm_sptr->apply(*this->add_projdata_sptr);
         }
 
       if (this->restart_reconstruction_every_scatter_iteration)
@@ -1263,23 +1291,62 @@ ScatterEstimation::project_mask_image()
               "the tail mask: {}",
               forward_projector_for_mask_sptr->parameter_info()));
 
+  // In 3D mode, DataSymmetriesForBins_PET_CartesianGrid requires ring_spacing / z_spacing = integer.
+  // Zoom the mask image axially to the nearest compatible spacing if needed.
+  shared_ptr<const DiscretisedDensity<3, float>> mask_image_for_proj_sptr = this->mask_image_sptr;
+  if (!run_in_2d_projdata)
+    {
+      const auto* mask_vox
+          = dynamic_cast<const VoxelsOnCartesianGrid<float>*>(this->mask_image_sptr.get());
+      if (mask_vox)
+        {
+          const float ring_spacing
+              = this->input_projdata_sptr->get_proj_data_info_sptr()->get_scanner_sptr()->get_ring_spacing();
+          const float z_spacing = mask_vox->get_grid_spacing()[1];
+          const int N = static_cast<int>(std::round(ring_spacing / z_spacing));
+          const float target_z = ring_spacing / N;
+          if (std::fabs(z_spacing - target_z) > 1e-3f * ring_spacing)
+            {
+              const float z_zoom = z_spacing / target_z;
+              const int new_z = static_cast<int>(std::round(mask_vox->get_length() * z_zoom));
+              info(format("ScatterEstimation: resampling mask image axially from {:g} to {:g} mm "
+                          "(ring_spacing/{}) for DataSymmetriesForBins_PET_CartesianGrid compatibility.",
+                          z_spacing, target_z, N));
+              auto zoomed_mask = zoom_image(*mask_vox,
+                                           make_coordinate(z_zoom, 1.f, 1.f),
+                                           make_coordinate(0.f, 0.f, 0.f),
+                                           make_coordinate(new_z, mask_vox->get_y_size(), mask_vox->get_x_size()),
+                                           ZoomOptions::preserve_values);
+              // Snap z-origin to nearest multiple of target_z (second constraint of DataSymmetriesForBins_PET_CartesianGrid)
+              auto orig = zoomed_mask.get_origin();
+              orig[1] = std::round(orig[1] / target_z) * target_z;
+              zoomed_mask.set_origin(orig);
+              mask_image_for_proj_sptr = std::make_shared<VoxelsOnCartesianGrid<float>>(std::move(zoomed_mask));
+            }
+        }
+      else
+        warning("ScatterEstimation: mask image is not a VoxelsOnCartesianGrid -- skipping axial zoom check.");
+    }
+
   shared_ptr<ProjData> mask_projdata;
   if (run_in_2d_projdata)
     {
-      forward_projector_for_mask_sptr->set_up(this->input_projdata_2d_sptr->get_proj_data_info_sptr(), this->mask_image_sptr);
+      forward_projector_for_mask_sptr->set_up(this->input_projdata_2d_sptr->get_proj_data_info_sptr(),
+                                              mask_image_for_proj_sptr);
 
       mask_projdata.reset(new ProjDataInMemory(this->input_projdata_2d_sptr->get_exam_info_sptr(),
                                                this->input_projdata_2d_sptr->get_proj_data_info_sptr()));
     }
   else
     {
-      forward_projector_for_mask_sptr->set_up(this->input_projdata_sptr->get_proj_data_info_sptr(), this->mask_image_sptr);
+      forward_projector_for_mask_sptr->set_up(this->input_projdata_sptr->get_proj_data_info_sptr(),
+                                              mask_image_for_proj_sptr);
 
       mask_projdata.reset(new ProjDataInMemory(this->input_projdata_sptr->get_exam_info_sptr(),
                                                this->input_projdata_sptr->get_proj_data_info_sptr()));
     }
 
-  forward_projector_for_mask_sptr->forward_project(*mask_projdata, *this->mask_image_sptr);
+  forward_projector_for_mask_sptr->forward_project(*mask_projdata, *mask_image_for_proj_sptr);
 
   // add 1 to be able to use create_tail_mask_from_ACFs (which expects ACFs,
   // so complains if the threshold is too low)
@@ -1377,7 +1444,7 @@ ScatterEstimation::create_multiplicative_binnorm_sptr()
       if (is_null_ptr(this->norm_3d_sptr))
         {
           warning("ScatterEstimation: no normalisation data set. This would only be appropriate for simple simulations.");
-          this->norm_3d_sptr = this->atten_norm_3d_sptr;
+          this->multiplicative_binnorm_sptr = this->atten_norm_3d_sptr;
         }
       else
         {

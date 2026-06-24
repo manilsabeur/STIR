@@ -59,7 +59,7 @@ extend_segment(const SegmentBySinogram<float>& segment,
   // check, whether the projection data cover 180° or 360°
   bool flip_views = false;
   bool extend_without_wrapping = false;
-  float min_phi = _PI, max_phi = -_PI;
+  float min_phi = 4 * _PI, max_phi = -4 * _PI;
   for (auto view = segment.get_proj_data_info_sptr()->get_min_view_num();
        view <= segment.get_proj_data_info_sptr()->get_max_view_num();
        view++)

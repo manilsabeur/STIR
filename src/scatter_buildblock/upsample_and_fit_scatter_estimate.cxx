@@ -17,6 +17,7 @@
 \author Daniel Deidda
 */
 
+#include <iostream>
 #include "stir/ProjDataInfo.h"
 #include "stir/ExamInfo.h"
 #include "stir/ProjDataInMemory.h"
@@ -56,10 +57,15 @@ ScatterEstimation::upsample_and_fit_scatter_estimate(ProjData& scaled_scatter_pr
 {
   info("upsample_and_fit_scatter_estimate: Interpolating scatter estimate to size of emission data");
 
-  shared_ptr<ProjDataInfo> interpolated_direct_scatter_proj_data_info_sptr(emission_proj_data.get_proj_data_info_sptr()->clone());
+  // -- UPSAMPLE FIX 1 --
+  // Use scaled_scatter_proj_data's ProjDataInfo (target output format) so that the TOF structure
+  // of the output is preserved: if the output is TOF, interpolated_direct_scatter is also TOF,
+  // and interpolate_projdata will correctly loop over all TOF bins, previously it
+  // was emission_proj_data that we used to have a buffer now we make it TOF
+  shared_ptr<ProjDataInfo> interpolated_direct_scatter_proj_data_info_sptr(
+      scaled_scatter_proj_data.get_proj_data_info_sptr()->clone());
   interpolated_direct_scatter_proj_data_info_sptr->reduce_segment_range(0, 0);
-
-  ProjDataInMemory interpolated_direct_scatter(emission_proj_data.get_exam_info_sptr(),
+  ProjDataInMemory interpolated_direct_scatter(scaled_scatter_proj_data.get_exam_info_sptr(),
                                                interpolated_direct_scatter_proj_data_info_sptr);
   {
     bool actual_remove_interleaving = remove_interleaving;
@@ -70,6 +76,14 @@ ScatterEstimation::upsample_and_fit_scatter_estimate(ProjData& scaled_scatter_pr
         warning("upsample_and_fit_scatter_estimate: forcing remove_interleaving to false as non-cylindrical projdata");
         actual_remove_interleaving = false;
       }
+    // For TOF data, the view-doubling in make_non_interleaved_segment can trigger the
+    // extend_without_wrapping fallback in extend_segment (when view coverage is neither
+    // exactly 180° nor 360°), which corrupts the heap via out-of-bounds view indices.
+    if (actual_remove_interleaving
+        && scaled_scatter_proj_data.get_proj_data_info_sptr()->get_max_tof_pos_num() > 0)
+      {
+        actual_remove_interleaving = false;
+      }
 
     interpolate_projdata(interpolated_direct_scatter, scatter_proj_data, spline_type, actual_remove_interleaving);
   }
@@ -77,12 +91,15 @@ ScatterEstimation::upsample_and_fit_scatter_estimate(ProjData& scaled_scatter_pr
   // now call inverse_SSRB, and normalise/scale if we need to
   if (min_scale_factor != 1 || max_scale_factor != 1 || !scatter_normalisation.is_trivial())
     {
-      ProjDataInMemory interpolated_scatter(emission_proj_data.get_exam_info_sptr(),
-                                            emission_proj_data.get_proj_data_info_sptr()->create_shared_clone());
+      // -- UPSAMPLE FIX 1bis -- (1bis because it's the same as the first one)
+      // Use scaled_scatter_proj_data's ProjDataInfo
+      // (emission_proj_data is non-TOF but scaled_scatter_proj_data is TOF).
+      ProjDataInMemory interpolated_scatter(scaled_scatter_proj_data.get_exam_info_sptr(),
+                                            scaled_scatter_proj_data.get_proj_data_info_sptr()->create_shared_clone());
       inverse_SSRB(interpolated_scatter, interpolated_direct_scatter);
 
-      scatter_normalisation.set_up(emission_proj_data.get_exam_info_sptr(),
-                                   emission_proj_data.get_proj_data_info_sptr()->create_shared_clone());
+      scatter_normalisation.set_up(scaled_scatter_proj_data.get_exam_info_sptr(),
+                                   scaled_scatter_proj_data.get_proj_data_info_sptr()->create_shared_clone());
       scatter_normalisation.undo(interpolated_scatter);
       Array<2, float> scale_factors;
 
@@ -95,16 +112,16 @@ ScatterEstimation::upsample_and_fit_scatter_estimate(ProjData& scaled_scatter_pr
             }
 
           // Set all scale_factors to min_scale_factor (which is equal to max_scale_factor here)
-          // Sadly a bit complicated to get index range ok
-          const ProjDataInfo& proj_data_info = *emission_proj_data.get_proj_data_info_sptr();
-          IndexRange2D sinogram_range(proj_data_info.get_min_segment_num(), proj_data_info.get_max_segment_num(), 0, 0);
+          const ProjDataInfo& proj_data_info = *scaled_scatter_proj_data.get_proj_data_info_sptr();
+          VectorWithOffset<IndexRange<1>> sinogram_range_vec(proj_data_info.get_min_segment_num(),
+                                                             proj_data_info.get_max_segment_num());
           for (int segment_num = proj_data_info.get_min_segment_num(); segment_num <= proj_data_info.get_max_segment_num();
                ++segment_num)
             {
-              sinogram_range[segment_num].resize(proj_data_info.get_min_axial_pos_num(segment_num),
-                                                 proj_data_info.get_max_axial_pos_num(segment_num));
+              sinogram_range_vec[segment_num] = IndexRange<1>(proj_data_info.get_min_axial_pos_num(segment_num),
+                                                              proj_data_info.get_max_axial_pos_num(segment_num));
             }
-          scale_factors.grow(sinogram_range);
+          scale_factors.grow(IndexRange2D(sinogram_range_vec));
           scale_factors.fill(min_scale_factor);
         }
       else

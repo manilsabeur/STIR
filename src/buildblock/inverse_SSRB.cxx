@@ -43,6 +43,19 @@ inverse_SSRB(ProjData& proj_data_4D, const ProjData& proj_data_3D)
       warning("inverse_SSRB: incompatible view-information");
       return Succeeded::no;
     }
+  // -- UPSAMPLE FIX 2 -- 
+  // Well, if I want to test if the upsampler works
+  // I want to know where it fails !
+  if ((proj_data_3D_info_sptr->get_min_tof_pos_num() != proj_data_4D_info_sptr->get_min_tof_pos_num())
+      || (proj_data_3D_info_sptr->get_max_tof_pos_num() != proj_data_4D_info_sptr->get_max_tof_pos_num()))
+    {
+      warning("inverse_SSRB: incompatible TOF range between 3D input (%d..%d) and 4D output (%d..%d)",
+              proj_data_3D_info_sptr->get_min_tof_pos_num(),
+              proj_data_3D_info_sptr->get_max_tof_pos_num(),
+              proj_data_4D_info_sptr->get_min_tof_pos_num(),
+              proj_data_4D_info_sptr->get_max_tof_pos_num());
+      return Succeeded::no;
+    }
   if ((proj_data_3D_info_sptr->get_min_tangential_pos_num() != proj_data_4D_info_sptr->get_min_tangential_pos_num())
       || (proj_data_3D_info_sptr->get_min_tangential_pos_num() != proj_data_4D_info_sptr->get_min_tangential_pos_num()))
     {
