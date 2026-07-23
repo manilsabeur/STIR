@@ -331,6 +331,11 @@ Implementation of the kernel-based OSMAP One-Step-Late reconstruction algorithm.
 Implementation of the OS Separable Paraboloidal Surrogate reconstruction algorithm.
 */
 /*!
+\defgroup PSV PSV
+\ingroup iterativereconstructors
+Implementation of the preconditioned SVRG reconstruction algorithm (PETRIC2 psv contribution).
+*/
+/*!
 \defgroup analyticreconstructors Analytic reconstructors
 \ingroup reconstructors
 Analytic (direct, closed-form) reconstruction methods.
