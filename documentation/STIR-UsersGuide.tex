@@ -1184,6 +1184,17 @@ and capabilities. See [Jac00] for a description of many details of the
 implementation.
 \item[OSSPS] an implementation of the Ordered Subsets Paraboloidal
 Surrogate algorithm by Erdogan and Fessler, and Ahn and Fessler [Ahn2003]. 
+\item[Preconditioned Gradient] a composable implementation of the preconditioned update
+$x^{(k+1)}=\left[x^{(k)}+\alpha_k P(x^{(k)})\tilde g_k\right]_+$, where the gradient estimate
+$\tilde g$ and the diagonal preconditioner $P$ are chosen at run time with the keys
+\texttt{gradient estimator type} (\texttt{Full Gradient}, \texttt{Ordered Subsets},
+\texttt{SVRG}, \texttt{SAGA}) and \texttt{preconditioner type} (\texttt{Identity},
+\texttt{EM}, \texttt{Hessian Diagonal}, \texttt{SPS}). Multiplicative algorithms are the
+special case $P=\mathrm{diag}(x/s)$ with $s$ the sensitivity image, so that MLEM, OSEM and
+OSSPS are particular compositions; combinations that are not meaningful are refused at set-up.
+See \texttt{examples/samples/PreconditionedGradient\_*.par}.
+\item[PSV] a locked preset of the above, reproducing the preconditioned SVRG algorithm submitted
+to the PETRIC2 challenge (SVRG with the Hessian diagonal of the Relative Difference Prior).
 \end{description}
 
 Since \textit{STIR} 2.0, all iterative algorithms use a \textit{generalised objective 
