@@ -62,6 +62,13 @@ public:
   //! Stores all necessary geometric info
   /*! Note that the density_info_ptr is not stored in this object. It's only used to get some info on sizes etc.
    */
+    //! Reset accumulation in the ORIGINAL back projector as well (modern API).
+  void start_accumulating_in_new_target() override;
+  //! Fetch the accumulated backprojection from the ORIGINAL back projector, then apply the
+  //! parsed filter. Without these overrides the wrapper returns its own (never filled)
+  //! buffer, i.e. silently backprojects zeros in the modern accumulate/get_output API.
+  void get_output(DiscretisedDensity<3, float>&) const override;
+
   void set_up(const shared_ptr<const ProjDataInfo>& proj_data_info_ptr,
               const shared_ptr<const DiscretisedDensity<3, float>>& density_info_ptr // TODO should be Info only
               ) override;

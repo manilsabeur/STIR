@@ -60,6 +60,12 @@ public:
   //! Stores all necessary geometric info
   /*! Note that the density_info_ptr is not stored in this object. It's only used to get some info on sizes etc.
    */
+    //! Set input image: applies the filter (parsed into _pre_data_processor_sptr via the
+  //! "filter type" key) and passes the FILTERED image to the original forward projector.
+  //! Without this override the original projector never receives an image in the modern
+  //! set_input() API and silently forward-projects zeros.
+  void set_input(const DiscretisedDensity<3, float>&) override;
+
   void set_up(const shared_ptr<const ProjDataInfo>& proj_data_info_ptr,
               const shared_ptr<const DiscretisedDensity<3, float>>& density_info_ptr // TODO should be Info only
               ) override;

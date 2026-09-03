@@ -22,6 +22,8 @@
 #include "stir/DataProcessor.h"
 #include "stir/DiscretisedDensity.h"
 #include "stir/is_null_ptr.h"
+#include "stir/Succeeded.h"
+#include "stir/error.h"
 #include "stir/warning.h"
 
 START_NAMESPACE_STIR
@@ -90,6 +92,25 @@ PostsmoothingBackProjectorByBin::set_up(const shared_ptr<const ProjDataInfo>& pr
 {
   BackProjectorByBin::set_up(proj_data_info_ptr, image_info_ptr);
   original_back_projector_ptr->set_up(proj_data_info_ptr, image_info_ptr);
+}
+
+void
+PostsmoothingBackProjectorByBin::start_accumulating_in_new_target()
+{
+  BackProjectorByBin::start_accumulating_in_new_target();
+  original_back_projector_ptr->start_accumulating_in_new_target();
+}
+
+void
+PostsmoothingBackProjectorByBin::get_output(DiscretisedDensity<3, float>& density) const
+{
+  // the accumulation lives in the ORIGINAL projector (actual_back_project delegates to it)
+  original_back_projector_ptr->get_output(density);
+  if (!is_null_ptr(_post_data_processor_sptr))
+    {
+      if (_post_data_processor_sptr->apply(density) != Succeeded::yes)
+        error("PostsmoothingBackProjectorByBin: postfilter failed");
+    }
 }
 
 const DataSymmetriesForViewSegmentNumbers*

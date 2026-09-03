@@ -79,6 +79,15 @@ PresmoothingForwardProjectorByBin::set_up(const shared_ptr<const ProjDataInfo>& 
   original_forward_projector_ptr->set_up(proj_data_info_ptr, image_info_ptr);
 }
 
+void
+PresmoothingForwardProjectorByBin::set_input(const DiscretisedDensity<3, float>& density)
+{
+  // base class clones the image and applies _pre_data_processor_sptr (the parsed "filter type")
+  ForwardProjectorByBin::set_input(density);
+  // pass the FILTERED image on to the projector that actually projects
+  original_forward_projector_ptr->set_input(*_density_sptr);
+}
+
 const DataSymmetriesForViewSegmentNumbers*
 PresmoothingForwardProjectorByBin::get_symmetries_used() const
 {
