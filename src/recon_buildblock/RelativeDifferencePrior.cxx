@@ -48,7 +48,6 @@ RelativeDifferencePrior<elemT>::initialise_keymap()
   this->parser.add_start_key("Relative Difference Prior Parameters");
   this->parser.add_key("only 2D", &only_2D);
   this->parser.add_key("kappa filename", &kappa_filename);
-  this->parser.add_key("gamma filename", &gamma_filename);
   this->parser.add_key("weights", &weights);
   this->parser.add_key("gradient filename prefix", &gradient_filename_prefix);
   this->parser.add_key("gamma value", &this->gamma);
@@ -64,8 +63,6 @@ RelativeDifferencePrior<elemT>::post_processing()
     return true;
   if (kappa_filename.size() != 0)
     this->kappa_ptr = read_from_file<DiscretisedDensity<3, elemT>>(kappa_filename);
-  if (gamma_filename.size() != 0)
-    this->gamma_ptr = read_from_file<DiscretisedDensity<3, elemT>>(gamma_filename);
 
   bool warn_about_even_size = false;
 
@@ -126,16 +123,6 @@ RelativeDifferencePrior<elemT>::check(DiscretisedDensity<3, elemT> const& curren
 {
   // Do base-class check
   base_type::check(current_image_estimate);
-  if (!is_null_ptr(this->gamma_ptr))
-    {
-      std::string explanation;
-      if (!this->gamma_ptr->has_same_characteristics(current_image_estimate, explanation))
-        error(std::string(registered_name)
-              + ": gamma image does not have the same index range as the reconstructed image:" + explanation);
-      for (auto iter = this->gamma_ptr->begin_all_const(); iter != this->gamma_ptr->end_all_const(); ++iter)
-        if (*iter < 0)
-          error(std::string(registered_name) + ": gamma image has negative values, which breaks convexity of the RDP");
-    }
   if (!is_null_ptr(this->kappa_ptr))
     {
       std::string explanation;
@@ -153,7 +140,6 @@ RelativeDifferencePrior<elemT>::set_defaults()
   //  this->_is_convex = true;
   this->only_2D = false;
   this->kappa_ptr.reset();
-  this->gamma_ptr.reset();
   this->weights.recycle();
   this->gamma = 2;
   this->epsilon = 0.0;
@@ -250,23 +236,6 @@ RelativeDifferencePrior<elemT>::get_kappa_sptr() const
   return this->kappa_ptr;
 }
 
-//! get current gamma image
-template <typename elemT>
-shared_ptr<DiscretisedDensity<3, elemT>>
-RelativeDifferencePrior<elemT>::get_gamma_sptr() const
-{
-  return this->gamma_ptr;
-}
-
-//! set gamma image
-template <typename elemT>
-void
-RelativeDifferencePrior<elemT>::set_gamma_sptr(const shared_ptr<DiscretisedDensity<3, elemT>>& g)
-{
-  this->gamma_ptr = g;
-  this->_already_set_up = false;
-}
-
 //! set kappa image
 template <typename elemT>
 void
@@ -309,21 +278,14 @@ compute_weights(Array<3, float>& weights, const CartesianCoordinate3D<float>& gr
 
 template <typename elemT>
 double
-RelativeDifferencePrior<elemT>::value(const elemT x, const elemT y, const elemT gamma_jk) const
-{
-  return 0.5 * (square(static_cast<double>(x - y)) / (x + y + gamma_jk * std::abs(x - y) + this->epsilon));
-}
-
-template <typename elemT>
-double
 RelativeDifferencePrior<elemT>::value(const elemT x, const elemT y) const
 {
-  return this->value(x, y, static_cast<elemT>(this->gamma));
+  return 0.5 * (square(static_cast<double>(x - y)) / (x + y + this->gamma * std::abs(x - y) + this->epsilon));
 }
 
 template <typename elemT>
 elemT
-RelativeDifferencePrior<elemT>::derivative_10(const elemT x, const elemT y, const elemT gamma_jk) const
+RelativeDifferencePrior<elemT>::derivative_10(const elemT x, const elemT y) const
 {
   if (this->epsilon == 0.0 && x == 0 && y == 0)
     {
@@ -332,16 +294,9 @@ RelativeDifferencePrior<elemT>::derivative_10(const elemT x, const elemT y, cons
       return elemT(0);
     }
 
-  const double num = (static_cast<double>(x - y) * (gamma_jk * std::abs(x - y) + x + 3 * y + 2 * this->epsilon));
-  const double denom_sqrt = static_cast<double>(x + y) + gamma_jk * std::abs(x - y) + this->epsilon;
+  const double num = (static_cast<double>(x - y) * (this->gamma * std::abs(x - y) + x + 3 * y + 2 * this->epsilon));
+  const double denom_sqrt = static_cast<double>(x + y) + this->gamma * std::abs(x - y) + this->epsilon;
   return static_cast<elemT>(num / (denom_sqrt * denom_sqrt));
-}
-
-template <typename elemT>
-elemT
-RelativeDifferencePrior<elemT>::derivative_10(const elemT x, const elemT y) const
-{
-  return this->derivative_10(x, y, static_cast<elemT>(this->gamma));
 }
 
 template <typename elemT>
@@ -403,8 +358,7 @@ RelativeDifferencePrior<elemT>::compute_value(const DiscretisedDensity<3, elemT>
                       else
                         {
                           current = weights[dz][dy][dx]
-                                    * value(current_image_estimate[z][y][x], current_image_estimate[z + dz][y + dy][x + dx],
-                                            gamma_for_pair(z, y, x, dz, dy, dx));
+                                    * value(current_image_estimate[z][y][x], current_image_estimate[z + dz][y + dy][x + dx]);
                         }
                       if (do_kappa)
                         current *= (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z + dz][y + dy][x + dx];
@@ -471,8 +425,7 @@ RelativeDifferencePrior<elemT>::compute_gradient(DiscretisedDensity<3, elemT>& p
                     {
                       double current
                           = weights[dz][dy][dx]
-                            * derivative_10(current_image_estimate[z][y][x], current_image_estimate[z + dz][y + dy][x + dx],
-                                            gamma_for_pair(z, y, x, dz, dy, dx));
+                            * derivative_10(current_image_estimate[z][y][x], current_image_estimate[z + dz][y + dy][x + dx]);
                       if (do_kappa)
                         current *= (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z + dz][y + dy][x + dx];
 
@@ -552,8 +505,7 @@ RelativeDifferencePrior<elemT>::compute_Hessian(DiscretisedDensity<3, elemT>& pr
                     {
                       elemT diagonal_current
                           = weights[ddz][ddy][ddx]
-                            * derivative_20(current_image_estimate[z][y][x], current_image_estimate[z + ddz][y + ddy][x + ddx],
-                                            gamma_for_pair(z, y, x, ddz, ddy, ddx));
+                            * derivative_20(current_image_estimate[z][y][x], current_image_estimate[z + ddz][y + ddy][x + ddx]);
                       if (do_kappa)
                         diagonal_current *= (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z + ddz][y + ddy][x + ddx];
                       current += diagonal_current;
@@ -563,8 +515,7 @@ RelativeDifferencePrior<elemT>::compute_Hessian(DiscretisedDensity<3, elemT>& pr
             {
               // The j != k cases (off-diagonal Hessian elements), no summing over neighbourhood
               current = weights[dz][dy][dx]
-                        * derivative_11(current_image_estimate[z][y][x], current_image_estimate[z + dz][y + dy][x + dx],
-                                        gamma_for_pair(z, y, x, dz, dy, dx));
+                        * derivative_11(current_image_estimate[z][y][x], current_image_estimate[z + dz][y + dy][x + dx]);
               if (do_kappa)
                 current *= (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z + dz][y + dy][x + dx];
             }
@@ -646,17 +597,14 @@ RelativeDifferencePrior<elemT>::accumulate_Hessian_times_input(DiscretisedDensit
                       if ((dz == 0) && (dy == 0) && (dx == 0))
                         {
                           // The j == k case
-                          current *= derivative_20(current_estimate[z][y][x], current_estimate[z + dz][y + dy][x + dx],
-                                                   gamma_for_pair(z, y, x, dz, dy, dx))
+                          current *= derivative_20(current_estimate[z][y][x], current_estimate[z + dz][y + dy][x + dx])
                                      * input[z][y][x];
                         }
                       else
                         {
-                          current *= (derivative_20(current_estimate[z][y][x], current_estimate[z + dz][y + dy][x + dx],
-                                                    gamma_for_pair(z, y, x, dz, dy, dx))
+                          current *= (derivative_20(current_estimate[z][y][x], current_estimate[z + dz][y + dy][x + dx])
                                           * input[z][y][x]
-                                      + derivative_11(current_estimate[z][y][x], current_estimate[z + dz][y + dy][x + dx],
-                                                      gamma_for_pair(z, y, x, dz, dy, dx))
+                                      + derivative_11(current_estimate[z][y][x], current_estimate[z + dz][y + dy][x + dx])
                                             * input[z + dz][y + dy][x + dx]);
                         }
 
@@ -674,28 +622,10 @@ RelativeDifferencePrior<elemT>::accumulate_Hessian_times_input(DiscretisedDensit
 
 template <typename elemT>
 elemT
-RelativeDifferencePrior<elemT>::derivative_20(const elemT x_j, const elemT x_k, const elemT gamma_jk) const
-{
-  if (x_j > 0.0 || x_k > 0.0 || this->epsilon > 0.0)
-    return 2 * pow(2 * x_k + this->epsilon, 2) / pow(x_j + x_k + gamma_jk * std::abs(x_j - x_k) + this->epsilon, 3);
-  else
-    return INFINITY;
-}
-
-template <typename elemT>
-elemT
 RelativeDifferencePrior<elemT>::derivative_20(const elemT x_j, const elemT x_k) const
 {
-  return this->derivative_20(x_j, x_k, static_cast<elemT>(this->gamma));
-}
-
-template <typename elemT>
-elemT
-RelativeDifferencePrior<elemT>::derivative_11(const elemT x_j, const elemT x_k, const elemT gamma_jk) const
-{
   if (x_j > 0.0 || x_k > 0.0 || this->epsilon > 0.0)
-    return -2 * (2 * x_j + this->epsilon) * (2 * x_k + this->epsilon)
-           / pow(x_j + x_k + gamma_jk * std::abs(x_j - x_k) + this->epsilon, 3);
+    return 2 * pow(2 * x_k + this->epsilon, 2) / pow(x_j + x_k + this->gamma * std::abs(x_j - x_k) + this->epsilon, 3);
   else
     return INFINITY;
 }
@@ -704,7 +634,11 @@ template <typename elemT>
 elemT
 RelativeDifferencePrior<elemT>::derivative_11(const elemT x_j, const elemT x_k) const
 {
-  return this->derivative_11(x_j, x_k, static_cast<elemT>(this->gamma));
+  if (x_j > 0.0 || x_k > 0.0 || this->epsilon > 0.0)
+    return -2 * (2 * x_j + this->epsilon) * (2 * x_k + this->epsilon)
+           / pow(x_j + x_k + this->gamma * std::abs(x_j - x_k) + this->epsilon, 3);
+  else
+    return INFINITY;
 }
 
 #ifdef _MSC_VER

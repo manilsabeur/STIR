@@ -30,8 +30,6 @@
 #include "stir/shared_ptr.h"
 #include <string>
 
-#include <cmath>
-
 START_NAMESPACE_STIR
 
 /*!
@@ -151,17 +149,6 @@ public:
   //! set penalty weights for the neigbourhood
   void set_weights(const Array<3, float>&);
 
-  //! get current gamma image (spatially-varying gamma; nullptr if a scalar gamma is used)
-  /*! \see set_gamma_sptr() */
-  shared_ptr<DiscretisedDensity<3, elemT>> get_gamma_sptr() const;
-
-  //! set gamma image
-  /*! Spatially-varying edge-preservation parameter. For a pair (j,k) the prior uses the
-      **geometric mean** \f$\sqrt{\gamma_j \gamma_k}\f$, which is symmetric as required and
-      reduces to the scalar case for a constant image. Values must be >= 0 (convexity).
-      If not set, the scalar \c gamma is used everywhere. */
-  void set_gamma_sptr(const shared_ptr<DiscretisedDensity<3, elemT>>&);
-
   //! get current kappa image
   /*! \warning As this function returns a shared_ptr, this is dangerous. You should not
       modify the image by manipulating the image refered to by this pointer.
@@ -202,9 +189,6 @@ protected:
   //! Filename for the \f$\kappa\f$ image that will be read by post_processing()
   std::string kappa_filename;
 
-  //! Filename for the spatially-varying \f$\gamma\f$ image that will be read by post_processing()
-  std::string gamma_filename;
-
   //! Check that the prior is ready to be used
   void check(DiscretisedDensity<3, elemT> const& current_image_estimate) const override;
 
@@ -214,19 +198,6 @@ protected:
 
 protected:
   shared_ptr<DiscretisedDensity<3, elemT>> kappa_ptr;
-
-  //! Optional spatially-varying \f$\gamma\f$ (nullptr => the scalar \c gamma is used)
-  shared_ptr<DiscretisedDensity<3, elemT>> gamma_ptr;
-
-  //! \f$\gamma\f$ for the pair (j,k): geometric mean of the two voxel values, or the scalar
-  inline elemT gamma_for_pair(const int z, const int y, const int x, const int dz, const int dy, const int dx) const
-  {
-    if (!gamma_ptr)
-      return static_cast<elemT>(this->gamma);
-    const elemT gj = (*gamma_ptr)[z][y][x];
-    const elemT gk = (*gamma_ptr)[z + dz][y + dy][x + dx];
-    return static_cast<elemT>(std::sqrt(static_cast<double>(gj) * static_cast<double>(gk)));
-  }
 
   //! The value and partial derivatives of the Relative Difference Prior
   /*!
@@ -251,11 +222,6 @@ protected:
   elemT derivative_10(const elemT x, const elemT y) const;
   elemT derivative_20(const elemT x_j, const elemT x_k) const;
   elemT derivative_11(const elemT x_j, const elemT x_k) const;
-  //! overloads taking an explicit \f$\gamma\f$ (used when a gamma image is set)
-  double value(const elemT x_j, const elemT x_k, const elemT gamma_jk) const;
-  elemT derivative_10(const elemT x, const elemT y, const elemT gamma_jk) const;
-  elemT derivative_20(const elemT x_j, const elemT x_k, const elemT gamma_jk) const;
-  elemT derivative_11(const elemT x_j, const elemT x_k, const elemT gamma_jk) const;
   //@}
 };
 
