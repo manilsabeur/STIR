@@ -29,6 +29,7 @@
 #include "stir/DiscretisedDensity.h"
 #include "stir/shared_ptr.h"
 #include <string>
+#include <cmath>
 
 START_NAMESPACE_STIR
 
@@ -152,6 +153,19 @@ public:
   //! Set the kappa image (spatially-varying penalty factors).
   virtual void set_kappa_sptr(const shared_ptr<const DiscretisedDensity<3, elemT>>&);
 
+  //! get current gamma image (spatially-varying edge-preservation parameter)
+  /*! \warning As this function returns a shared_ptr, this is dangerous. You should not
+      modify the image by manipulating the image refered to by this pointer.
+  */
+  shared_ptr<const DiscretisedDensity<3, elemT>> get_gamma_sptr() const;
+
+  //! Set the gamma image (spatially-varying edge-preservation parameter).
+  /*! Only meaningful for potentials that use a gamma (e.g. the Relative Difference).
+      When not set, the potential's own scalar gamma is used and the result is
+      bit-identical to the behaviour without this feature.
+  */
+  virtual void set_gamma_sptr(const shared_ptr<const DiscretisedDensity<3, elemT>>&);
+
   //! Set up the prior for a target image. Must be called before use.
   Succeeded set_up(shared_ptr<const DiscretisedDensity<3, elemT>> const& target_sptr) override;
 
@@ -186,6 +200,9 @@ protected:
   //! Filename for the \f$\kappa\f$ image that will be read by post_processing()
   std::string kappa_filename;
 
+  //! Filename for the \f$\gamma\f$ image that will be read by post_processing()
+  std::string gamma_filename;
+
   //! Gibbs Potential Function
   potentialT potential;
 
@@ -201,6 +218,28 @@ protected:
 
   //! The kappa image (spatially-varying penalty factors).
   shared_ptr<const DiscretisedDensity<3, elemT>> kappa_ptr;
+
+  //! The gamma image (spatially-varying edge-preservation parameter). May be null.
+  shared_ptr<const DiscretisedDensity<3, elemT>> gamma_ptr;
+
+  //! Gamma to use for the pair (r, r+dr), or -1 when no gamma image is set.
+  /*! Returns the \e symmetric value \f$\sqrt{\gamma_r \gamma_{r+dr}}\f$. Symmetry is
+      \e required: the engine computes the gradient over a half-neighbourhood and multiplies
+      by 2, a shortcut that is only valid when the pair term satisfies
+      \f$\phi(\lambda_r,\lambda_{r+dr}) = \phi(\lambda_{r+dr},\lambda_r)\f$. Reading gamma at
+      the centre voxel alone would silently break that shortcut (no error, just a wrong gradient).
+      The geometric mean is the same device already used for \f$\kappa_r \kappa_{r+dr}\f$.
+      \return -1 when no gamma image is set, which makes the potential fall back on its scalar
+      member and reproduce the previous behaviour exactly.
+  */
+  inline double gamma_for_pair(int z, int y, int x, int dz, int dy, int dx) const
+  {
+    if (is_null_ptr(this->gamma_ptr))
+      return -1.0;
+    const double g_c = (*this->gamma_ptr)[z][y][x];
+    const double g_n = (*this->gamma_ptr)[z + dz][y + dy][x + dx];
+    return std::sqrt(g_c * g_n);
+  }
 };
 
 END_NAMESPACE_STIR

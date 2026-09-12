@@ -113,6 +113,52 @@ public:
     return NUM * DEN * DEN * DEN;
   }
 
+  // ---------------------------------------------------------------------------------------
+  // Overloads taking an explicit per-pair gamma (spatially-varying gamma, see GibbsPenalty).
+  // The 5-argument versions above are deliberately left BYTE-FOR-BYTE untouched so that a run
+  // without a gamma image reproduces the previous binary exactly (a local copy of `gamma` was
+  // enough to change FMA contraction under -O3 and break bit-identity: measured 1.19e-06 max).
+  // `gamma_pair` must be SYMMETRIC in (r, r+dr) — the engine passes sqrt(gamma_r * gamma_{r+dr}) —
+  // because the gradient is computed over a half-neighbourhood and multiplied by 2.
+  // ---------------------------------------------------------------------------------------
+  __host__ __device__ inline double
+  value(const elemT val_center, const elemT val_neigh, int z, int y, int x, double gamma_pair) const
+  {
+    const elemT diff = val_center - val_neigh;
+    const elemT add = val_center + val_neigh;
+    const elemT NUM = 0.5 * (diff * diff);
+    const elemT DEN = 1.0 / (add + static_cast<elemT>(gamma_pair) * fabs(diff) + epsilon);
+    return NUM * DEN;
+  }
+
+  __host__ __device__ inline double
+  derivative_10(const elemT val_center, const elemT val_neigh, int z, int y, int x, double gamma_pair) const
+  {
+    const elemT diff = val_center - val_neigh;
+    const elemT factor = val_center + val_neigh + static_cast<elemT>(gamma_pair) * fabs(diff) + epsilon;
+    const elemT NUM = 0.5 * diff * (factor + 2 * val_neigh + epsilon);
+    const elemT DEN = 1.0 / (factor * factor);
+    return NUM * DEN;
+  }
+
+  __host__ __device__ inline double
+  derivative_20(const elemT val_center, const elemT val_neigh, int z, int y, int x, double gamma_pair) const
+  {
+    const elemT NUM = 2 * val_neigh + epsilon;
+    const elemT DEN
+        = 1.0 / (val_center + val_neigh + static_cast<elemT>(gamma_pair) * fabs(val_center - val_neigh) + epsilon);
+    return NUM * NUM * DEN * DEN * DEN;
+  }
+
+  __host__ __device__ inline double
+  derivative_11(const elemT val_center, const elemT val_neigh, int z, int y, int x, double gamma_pair) const
+  {
+    const elemT NUM = -(2 * val_center + epsilon) * (2 * val_neigh + epsilon);
+    const elemT DEN
+        = 1.0 / (val_center + val_neigh + static_cast<elemT>(gamma_pair) * fabs(val_center - val_neigh) + epsilon);
+    return NUM * DEN * DEN * DEN;
+  }
+
   //! method to indicate whether the the prior defined by this potential is convex
   static inline bool is_convex() { return true; }
 

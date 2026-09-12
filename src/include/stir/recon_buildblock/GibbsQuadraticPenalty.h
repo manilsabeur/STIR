@@ -71,6 +71,25 @@ public:
     return static_cast<double>(-0.5);
   }
 
+  // Overloads for API compatibility with a spatially-varying gamma: the quadratic potential has
+  // no gamma, so the extra argument is ignored and these simply forward to the versions above.
+  __host__ __device__ inline double value(const elemT& c, const elemT n, int z, int y, int x, double) const
+  {
+    return value(c, n, z, y, x);
+  }
+  __host__ __device__ inline double derivative_10(const elemT c, const elemT n, int z, int y, int x, double) const
+  {
+    return derivative_10(c, n, z, y, x);
+  }
+  __host__ __device__ inline double derivative_20(const elemT c, const elemT n, int z, int y, int x, double) const
+  {
+    return derivative_20(c, n, z, y, x);
+  }
+  __host__ __device__ inline double derivative_11(const elemT c, const elemT n, int z, int y, int x, double) const
+  {
+    return derivative_11(c, n, z, y, x);
+  }
+
   //! method to indicate whether the the prior defined by this potential is convex
   static inline bool is_convex() { return true; }
   //! Method for setting up parsing additional parameters

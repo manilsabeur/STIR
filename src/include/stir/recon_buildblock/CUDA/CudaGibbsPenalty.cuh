@@ -58,6 +58,8 @@ CudaGibbsPenalty_value_kernel(double* output,
                             const float* __restrict__ weights,
                             const elemT* __restrict__ kappa,
                             const bool do_kappa,
+                            const elemT* __restrict__ gamma,
+                            const bool do_gamma,
                             const int3 d_Image_dim,
                             const int3 d_Image_max_indices,
                             const int3 d_Image_min_indices,
@@ -113,7 +115,10 @@ CudaGibbsPenalty_value_kernel(double* output,
 
           const elemT val_neigh = current_image[neighbourIndex];
           elemT current
-              = weights[weightsIndex] * potential.value(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x);
+              = weights[weightsIndex]
+                * (do_gamma ? potential.value(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x,
+                                              sqrt(static_cast<double>(gamma[centerIndex]) * static_cast<double>(gamma[neighbourIndex])))
+                            : potential.value(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x));
 
           if (do_kappa)
             current *= kappa[centerIndex] * kappa[neighbourIndex];
@@ -145,6 +150,8 @@ CudaGibbsPenalty_gradient_kernel(elemT* gradient,
                                const float* __restrict__ weights,
                                const elemT* __restrict__ kappa,
                                const bool do_kappa,
+                               const elemT* __restrict__ gamma,
+                               const bool do_gamma,
                                const float penalisation_factor,
                                const int3 d_Image_dim,
                                const int3 d_Image_max_indices,
@@ -195,7 +202,10 @@ CudaGibbsPenalty_gradient_kernel(elemT* gradient,
           const elemT val_neigh = current_image[neighbourIndex];
 
           elemT current = weights[weightsIndex]
-                          * potential.derivative_10(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x);
+                          * (do_gamma ? potential.derivative_10(val_center, val_neigh, Image_coord.z, Image_coord.y,
+                                                        Image_coord.x, sqrt(static_cast<double>(gamma[inputIndex]) * static_cast<double>(gamma[neighbourIndex])))
+                                      : potential.derivative_10(val_center, val_neigh, Image_coord.z, Image_coord.y,
+                                                         Image_coord.x));
 
           if (do_kappa)
             current *= kappa[inputIndex] * kappa[neighbourIndex];
@@ -221,6 +231,8 @@ CudaGibbsPenalty_gradient_dot_input_kernel(double* output,
                                          const float* __restrict__ weights,
                                          const elemT* __restrict__ kappa,
                                          const bool do_kappa,
+                                         const elemT* __restrict__ gamma,
+                                         const bool do_gamma,
                                          const int3 d_Image_dim,
                                          const int3 d_Image_max_indices,
                                          const int3 d_Image_min_indices,
@@ -276,7 +288,10 @@ CudaGibbsPenalty_gradient_dot_input_kernel(double* output,
           const elemT val_neigh = current_image[neighbourIndex];
 
           elemT current = weights[weightsIndex]
-                          * potential.derivative_10(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x);
+                          * (do_gamma ? potential.derivative_10(val_center, val_neigh, Image_coord.z, Image_coord.y,
+                                                        Image_coord.x, sqrt(static_cast<double>(gamma[inputIndex]) * static_cast<double>(gamma[neighbourIndex])))
+                                      : potential.derivative_10(val_center, val_neigh, Image_coord.z, Image_coord.y,
+                                                         Image_coord.x));
 
           if (do_kappa)
             current *= kappa[inputIndex] * kappa[neighbourIndex];
@@ -309,6 +324,8 @@ CudaGibbsPenalty_Hessian_diagonal_kernel(elemT* Hessian_diag,
                                        const float* __restrict__ weights,
                                        const elemT* __restrict__ kappa,
                                        const bool do_kappa,
+                                       const elemT* __restrict__ gamma,
+                                       const bool do_gamma,
                                        const float penalisation_factor,
                                        const int3 d_Image_dim,
                                        const int3 d_Image_max_indices,
@@ -357,7 +374,10 @@ CudaGibbsPenalty_Hessian_diagonal_kernel(elemT* Hessian_diag,
           // Neighbour voxel contribution
           const elemT val_neigh = current_image[neighbourIndex];
           elemT current = weights[weightsIndex]
-                          * potential.derivative_20(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x);
+                          * (do_gamma ? potential.derivative_20(val_center, val_neigh, Image_coord.z, Image_coord.y,
+                                                        Image_coord.x, sqrt(static_cast<double>(gamma[inputIndex]) * static_cast<double>(gamma[neighbourIndex])))
+                                      : potential.derivative_20(val_center, val_neigh, Image_coord.z, Image_coord.y,
+                                                         Image_coord.x));
 
           if (do_kappa)
             {
@@ -382,6 +402,8 @@ CudaGibbsPenalty_Hessian_Times_Input_kernel(elemT* output,
                                           const float* __restrict__ weights,
                                           const elemT* __restrict__ kappa,
                                           const bool do_kappa,
+                                          const elemT* __restrict__ gamma,
+                                          const bool do_gamma,
                                           const float penalisation_factor,
                                           const int3 d_Image_dim,
                                           const int3 d_Image_max_indices,
@@ -434,12 +456,22 @@ CudaGibbsPenalty_Hessian_Times_Input_kernel(elemT* output,
           const elemT input_neigh = input[neighbourIndex];
 
           if ((dz == 0) && (dy == 0) && (dx == 0))
-            current *= potential.derivative_20(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x) * input_center;
+            current *= (do_gamma ? potential.derivative_20(val_center, val_neigh, Image_coord.z, Image_coord.y,
+                                                          Image_coord.x, sqrt(static_cast<double>(gamma[inputIndex]) * static_cast<double>(gamma[neighbourIndex])))
+                                 : potential.derivative_20(val_center, val_neigh, Image_coord.z, Image_coord.y,
+                                                           Image_coord.x))
+                        * input_center;
 
           else
             current
-                *= potential.derivative_20(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x) * input_center
-                   + potential.derivative_11(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x) * input_neigh;
+                *= (do_gamma ? potential.derivative_20(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x,
+                                                      sqrt(static_cast<double>(gamma[inputIndex]) * static_cast<double>(gamma[neighbourIndex])))
+                             : potential.derivative_20(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x))
+                       * input_center
+                   + (do_gamma ? potential.derivative_11(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x,
+                                                        sqrt(static_cast<double>(gamma[inputIndex]) * static_cast<double>(gamma[neighbourIndex])))
+                               : potential.derivative_11(val_center, val_neigh, Image_coord.z, Image_coord.y, Image_coord.x))
+                         * input_neigh;
 
           if (do_kappa)
             current *= kappa[inputIndex] * kappa[neighbourIndex];
@@ -474,6 +506,7 @@ CudaGibbsPenalty<elemT, PotentialT>::compute_value(const DiscretisedDensity<3, e
   array_to_device(d_image_data, current_image_estimate);
 
   const bool do_kappa = !is_null_ptr(this->get_kappa_sptr());
+  const bool do_gamma = !is_null_ptr(this->get_gamma_sptr());
   if (do_kappa != (!d_kappa_data.empty()))
     error("CudaGibbsPenalty internal error: inconsistent CPU and device kappa");
 
@@ -482,6 +515,8 @@ CudaGibbsPenalty<elemT, PotentialT>::compute_value(const DiscretisedDensity<3, e
                                                                                             d_weights_data.data(),
                                                                                             do_kappa ? d_kappa_data.data() : nullptr,
                                                                                             do_kappa,
+                                                                                            do_gamma ? d_gamma_data.data() : nullptr,
+                                                                                            do_gamma,
                                                                                             d_image_dim,
                                                                                             d_image_max_indices,
                                                                                             d_image_min_indices,
@@ -517,6 +552,7 @@ CudaGibbsPenalty<elemT, PotentialT>::compute_gradient(DiscretisedDensity<3, elem
   array_to_device(d_image_data, current_image_estimate);
 
   const bool do_kappa = !is_null_ptr(this->get_kappa_sptr());
+  const bool do_gamma = !is_null_ptr(this->get_gamma_sptr());
   if (do_kappa != (!d_kappa_data.empty()))
     error("CudaGibbsPenalty internal error: inconsistent CPU and device kappa");
 
@@ -524,7 +560,9 @@ CudaGibbsPenalty<elemT, PotentialT>::compute_gradient(DiscretisedDensity<3, elem
                                                                              d_image_data.data(),
                                                                              d_weights_data.data(),
                                                                              do_kappa ? d_kappa_data.data() : nullptr,
-                                                                             do_kappa,
+                                                                                            do_kappa,
+                                                                                            do_gamma ? d_gamma_data.data() : nullptr,
+                                                                                            do_gamma,
                                                                              this->penalisation_factor,
                                                                              d_image_dim,
                                                                              d_image_max_indices,
@@ -560,6 +598,7 @@ CudaGibbsPenalty<elemT, PotentialT>::compute_gradient_times_input(const Discreti
   array_to_device(d_input_data, input);
 
   const bool do_kappa = !is_null_ptr(this->get_kappa_sptr());
+  const bool do_gamma = !is_null_ptr(this->get_gamma_sptr());
   if (do_kappa != (!d_kappa_data.empty()))
     error("CudaGibbsPenalty internal error: inconsistent CPU and device kappa");
 
@@ -569,7 +608,9 @@ CudaGibbsPenalty<elemT, PotentialT>::compute_gradient_times_input(const Discreti
                                                   d_image_data.data(),
                                                   d_weights_data.data(),
                                                   do_kappa ? d_kappa_data.data() : nullptr,
-                                                  do_kappa,
+                                                                                            do_kappa,
+                                                                                            do_gamma ? d_gamma_data.data() : nullptr,
+                                                                                            do_gamma,
                                                   d_image_dim,
                                                   d_image_max_indices,
                                                   d_image_min_indices,
@@ -604,6 +645,7 @@ CudaGibbsPenalty<elemT, PotentialT>::compute_Hessian_diagonal(DiscretisedDensity
   array_to_device(d_image_data, current_image_estimate);
 
   const bool do_kappa = !is_null_ptr(this->get_kappa_sptr());
+  const bool do_gamma = !is_null_ptr(this->get_gamma_sptr());
   if (do_kappa != (!d_kappa_data.empty()))
     error("CudaGibbsPenalty internal error: inconsistent CPU and device kappa");
 
@@ -611,7 +653,9 @@ CudaGibbsPenalty<elemT, PotentialT>::compute_Hessian_diagonal(DiscretisedDensity
                                                                                      d_image_data.data(),
                                                                                      d_weights_data.data(),
                                                                                      do_kappa ? d_kappa_data.data() : nullptr,
-                                                                                     do_kappa,
+                                                                                            do_kappa,
+                                                                                            do_gamma ? d_gamma_data.data() : nullptr,
+                                                                                            do_gamma,
                                                                                      this->penalisation_factor,
                                                                                      d_image_dim,
                                                                                      d_image_max_indices,
@@ -646,6 +690,7 @@ CudaGibbsPenalty<elemT, PotentialT>::accumulate_Hessian_times_input(DiscretisedD
   array_to_device(d_output_data, output);
 
   const bool do_kappa = !is_null_ptr(this->get_kappa_sptr());
+  const bool do_gamma = !is_null_ptr(this->get_gamma_sptr());
   if (do_kappa != (!d_kappa_data.empty()))
     error("CudaGibbsPenalty internal error: inconsistent CPU and device kappa");
 
@@ -654,7 +699,9 @@ CudaGibbsPenalty<elemT, PotentialT>::accumulate_Hessian_times_input(DiscretisedD
                                                                                         d_input_data.data(),
                                                                                         d_weights_data.data(),
                                                                                         do_kappa ? d_kappa_data.data() : nullptr,
-                                                                                        do_kappa,
+                                                                                            do_kappa,
+                                                                                            do_gamma ? d_gamma_data.data() : nullptr,
+                                                                                            do_gamma,
                                                                                         this->penalisation_factor,
                                                                                         d_image_dim,
                                                                                         d_image_max_indices,
@@ -674,6 +721,18 @@ CudaGibbsPenalty<elemT, PotentialT>::set_up(shared_ptr<const DiscretisedDensity<
 
   if (base_type::set_up(target_sptr) == Succeeded::no)
     return Succeeded::no;
+
+  // Upload the gamma image (spatially-varying edge preservation), if any, exactly like kappa.
+  if (!is_null_ptr(this->get_gamma_sptr()))
+    {
+      std::vector<elemT> gamma_host(this->get_gamma_sptr()->size_all());
+      std::copy(this->get_gamma_sptr()->begin_all_const(), this->get_gamma_sptr()->end_all_const(), gamma_host.begin());
+      d_gamma_data.resize(gamma_host.size());
+      cudaMemcpy(d_gamma_data.data(), gamma_host.data(), gamma_host.size() * sizeof(elemT), cudaMemcpyHostToDevice);
+    }
+  else
+    d_gamma_data.clear();
+
   this->_already_set_up = false;
 
   // Fill CUDA int3 objects (This is needed because CartesianCoordinate3D cannot be used on GPU)

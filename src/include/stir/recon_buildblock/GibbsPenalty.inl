@@ -56,6 +56,7 @@ GibbsPenalty<elemT, potentialT>::initialise_keymap()
   this->parser.add_start_key(this->get_parsing_name());
   this->parser.add_key("only 2D", &only_2D);
   this->parser.add_key("kappa filename", &kappa_filename);
+  this->parser.add_key("gamma filename", &gamma_filename);
   this->parser.add_key("weights", &weights);
   this->parser.add_key("gradient filename prefix", &gradient_filename_prefix);
   this->potential.initialise_keymap(this->parser);
@@ -70,6 +71,8 @@ GibbsPenalty<elemT, potentialT>::post_processing()
     return true;
   if (kappa_filename.size() != 0)
     this->kappa_ptr = read_from_file<DiscretisedDensity<3, elemT>>(kappa_filename);
+  if (gamma_filename.size() != 0)
+    this->gamma_ptr = read_from_file<DiscretisedDensity<3, elemT>>(gamma_filename);
 
   bool warn_about_even_size = false;
 
@@ -151,6 +154,16 @@ GibbsPenalty<elemT, potentialT>::check(DiscretisedDensity<3, elemT> const& curre
       if (!this->kappa_ptr->has_same_characteristics(current_image_estimate, explanation))
         error(": GibbsPrior : kappa image does not have the same index range as the reconstructed image:" + explanation);
     }
+  if (!is_null_ptr(this->gamma_ptr))
+    {
+      std::string explanation;
+      if (!this->gamma_ptr->has_same_characteristics(current_image_estimate, explanation))
+        error(": GibbsPrior : gamma image does not have the same index range as the reconstructed image:" + explanation);
+      // A negative gamma would make the RDP denominator vanish and break convexity.
+      for (auto iter = this->gamma_ptr->begin_all_const(); iter != this->gamma_ptr->end_all_const(); ++iter)
+        if (*iter < 0)
+          error(": GibbsPrior : gamma image contains negative values");
+    }
 }
 
 template <typename elemT, typename potentialT>
@@ -160,6 +173,7 @@ GibbsPenalty<elemT, potentialT>::set_defaults()
   base_type::set_defaults();
   this->only_2D = false;
   this->kappa_ptr.reset();
+  this->gamma_ptr.reset();
   this->weights.recycle();
   this->_already_set_up = false;
   this->potential.set_defaults();
@@ -252,6 +266,23 @@ GibbsPenalty<elemT, PotentialT>::set_kappa_sptr(const shared_ptr<const Discretis
   this->kappa_ptr = k;
 }
 
+//! get current gamma image
+template <typename elemT, typename PotentialT>
+shared_ptr<const DiscretisedDensity<3, elemT>>
+GibbsPenalty<elemT, PotentialT>::get_gamma_sptr() const
+{
+  return this->gamma_ptr;
+}
+
+//! set gamma image
+template <typename elemT, typename PotentialT>
+void
+GibbsPenalty<elemT, PotentialT>::set_gamma_sptr(const shared_ptr<const DiscretisedDensity<3, elemT>>& g)
+{
+  this->gamma_ptr = g;
+  this->_already_set_up = false;
+}
+
 template <typename elemT, typename PotentialT>
 double
 GibbsPenalty<elemT, PotentialT>::compute_value(const DiscretisedDensity<3, elemT>& current_image_estimate)
@@ -264,6 +295,7 @@ GibbsPenalty<elemT, PotentialT>::compute_value(const DiscretisedDensity<3, elemT
     return 0.;
 
   const bool do_kappa = !is_null_ptr(kappa_ptr);
+  const bool do_gamma = !is_null_ptr(gamma_ptr);
 
   double result = 0.0;
 #ifdef STIR_OPENMP
@@ -293,7 +325,9 @@ GibbsPenalty<elemT, PotentialT>::compute_value(const DiscretisedDensity<3, elemT
                   if ((dx == 0) && (dy == 0) && (dz == 0))
                     continue;
                   const elemT val_neigh = current_image_estimate[z + dz][y + dy][x + dx];
-                  double current = weights[dz][dy][dx] * this->potential.value(val_center, val_neigh, z, y, x);
+                  double current = weights[dz][dy][dx]
+                                   * (do_gamma ? this->potential.value(val_center, val_neigh, z, y, x, this->gamma_for_pair(z, y, x, dz, dy, dx))
+                                               : this->potential.value(val_center, val_neigh, z, y, x));
 
                   if (do_kappa)
                     current *= (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z + dz][y + dy][x + dx];
@@ -322,6 +356,7 @@ GibbsPenalty<elemT, PotentialT>::compute_gradient(DiscretisedDensity<3, elemT>& 
     }
 
   const bool do_kappa = !is_null_ptr(kappa_ptr);
+  const bool do_gamma = !is_null_ptr(gamma_ptr);
 
 #ifdef STIR_OPENMP
 #  if _OPENMP >= 201107 // OpenMP 3.1 or newer supports collapse(3)
@@ -351,7 +386,9 @@ GibbsPenalty<elemT, PotentialT>::compute_gradient(DiscretisedDensity<3, elemT>& 
                   if ((dx == 0) && (dy == 0) && (dz == 0))
                     continue;
                   const elemT val_neigh = current_image_estimate[z + dz][y + dy][x + dx];
-                  double current = weights[dz][dy][dx] * this->potential.derivative_10(val_center, val_neigh, z, y, x);
+                  double current = weights[dz][dy][dx]
+                                   * (do_gamma ? this->potential.derivative_10(val_center, val_neigh, z, y, x, this->gamma_for_pair(z, y, x, dz, dy, dx))
+                                               : this->potential.derivative_10(val_center, val_neigh, z, y, x));
                   if (do_kappa)
                     current *= (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z + dz][y + dy][x + dx];
                   gradient += current;
@@ -376,6 +413,7 @@ GibbsPenalty<elemT, PotentialT>::compute_gradient_times_input(const DiscretisedD
     }
 
   const bool do_kappa = !is_null_ptr(kappa_ptr);
+  const bool do_gamma = !is_null_ptr(gamma_ptr);
 
   double result = 0.0;
 #ifdef STIR_OPENMP
@@ -407,7 +445,9 @@ GibbsPenalty<elemT, PotentialT>::compute_gradient_times_input(const DiscretisedD
                   if ((dx == 0) && (dy == 0) && (dz == 0))
                     continue;
                   const elemT val_neigh = current_image_estimate[z + dz][y + dy][x + dx];
-                  double current = weights[dz][dy][dx] * this->potential.derivative_10(val_center, val_neigh, z, y, x);
+                  double current = weights[dz][dy][dx]
+                                   * (do_gamma ? this->potential.derivative_10(val_center, val_neigh, z, y, x, this->gamma_for_pair(z, y, x, dz, dy, dx))
+                                               : this->potential.derivative_10(val_center, val_neigh, z, y, x));
                   if (do_kappa)
                     current *= (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z + dz][y + dy][x + dx];
                   gradient += current;
@@ -438,6 +478,7 @@ GibbsPenalty<elemT, PotentialT>::compute_Hessian(DiscretisedDensity<3, elemT>& p
       = dynamic_cast<DiscretisedDensityOnCartesianGrid<3, elemT>&>(prior_Hessian_for_single_densel);
 
   const bool do_kappa = !is_null_ptr(kappa_ptr);
+  const bool do_gamma = !is_null_ptr(gamma_ptr);
 
   const int z = coords[1];
   const int y = coords[2];
@@ -464,8 +505,13 @@ GibbsPenalty<elemT, PotentialT>::compute_Hessian(DiscretisedDensity<3, elemT>& p
                   for (int ddx = min_dx; ddx <= max_dx; ++ddx)
                     {
                       elemT diagonal_current = weights[ddz][ddy][ddx] * 2
-                                               * this->potential.derivative_20(
-                                                   val_center, current_image_estimate[z + ddz][y + ddy][x + ddx], z, y, x);
+                                               * (do_gamma
+                                                      ? this->potential.derivative_20(
+                                                          val_center, current_image_estimate[z + ddz][y + ddy][x + ddx], z, y,
+                                                          x, this->gamma_for_pair(z, y, x, ddz, ddy, ddx))
+                                                      : this->potential.derivative_20(
+                                                          val_center, current_image_estimate[z + ddz][y + ddy][x + ddx], z, y,
+                                                          x));
                       if (do_kappa)
                         diagonal_current *= (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z + ddz][y + ddy][x + ddx];
                       current += diagonal_current;
@@ -475,7 +521,11 @@ GibbsPenalty<elemT, PotentialT>::compute_Hessian(DiscretisedDensity<3, elemT>& p
             {
               // The j != k vases (off-diagonal Hessian elements)
               current = weights[dz][dy][dx] * 2
-                        * this->potential.derivative_11(val_center, current_image_estimate[z + dz][y + dy][x + dx], z, y, x);
+                        * (do_gamma ? this->potential.derivative_11(val_center,
+                                                                    current_image_estimate[z + dz][y + dy][x + dx], z, y, x,
+                                                                    this->gamma_for_pair(z, y, x, dz, dy, dx))
+                                      : this->potential.derivative_11(val_center,
+                                                                      current_image_estimate[z + dz][y + dy][x + dx], z, y, x));
               if (do_kappa)
                 current *= (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z + dz][y + dy][x + dx];
             }
@@ -501,6 +551,7 @@ GibbsPenalty<elemT, PotentialT>::compute_Hessian_diagonal(DiscretisedDensity<3, 
     }
 
   const bool do_kappa = !is_null_ptr(kappa_ptr);
+  const bool do_gamma = !is_null_ptr(gamma_ptr);
 
 #ifdef STIR_OPENMP
 #  if _OPENMP >= 201107 // OpenMP 3.1 or newer supports collapse(3)
@@ -530,7 +581,9 @@ GibbsPenalty<elemT, PotentialT>::compute_Hessian_diagonal(DiscretisedDensity<3, 
                   if ((dx == 0) && (dy == 0) && (dz == 0))
                     continue;
                   const elemT val_neigh = current_image_estimate[z + dz][y + dy][x + dx];
-                  double current = weights[dz][dy][dx] * this->potential.derivative_20(val_center, val_neigh, z, y, x);
+                  double current = weights[dz][dy][dx]
+                                   * (do_gamma ? this->potential.derivative_20(val_center, val_neigh, z, y, x, this->gamma_for_pair(z, y, x, dz, dy, dx))
+                                               : this->potential.derivative_20(val_center, val_neigh, z, y, x));
                   if (do_kappa)
                     current *= (*kappa_ptr)[z][y][x] * (*kappa_ptr)[z + dz][y + dy][x + dx];
                   Hessian_diag_element += current;
@@ -558,6 +611,7 @@ GibbsPenalty<elemT, PotentialT>::accumulate_Hessian_times_input(DiscretisedDensi
 
   this->check(input);
   const bool do_kappa = !is_null_ptr(kappa_ptr);
+  const bool do_gamma = !is_null_ptr(gamma_ptr);
 
 #ifdef STIR_OPENMP
 #  if _OPENMP >= 201107 // OpenMP 3.1 or newer supports collapse(3)
@@ -599,7 +653,9 @@ GibbsPenalty<elemT, PotentialT>::accumulate_Hessian_times_input(DiscretisedDensi
                   const elemT input_neigh = input[z + dz][y + dy][x + dx];
 
                   if ((dz == 0) && (dy == 0) && (dx == 0))
-                    current *= this->potential.derivative_20(val_center, val_neigh, z, y, x) * input_center;
+                    current *= (do_gamma ? this->potential.derivative_20(val_center, val_neigh, z, y, x, this->gamma_for_pair(z, y, x, dz, dy, dx))
+                                        : this->potential.derivative_20(val_center, val_neigh, z, y, x))
+                             * input_center;
 
                   else
                     current *= potential.derivative_20(val_center, val_neigh, z, y, x) * input_center

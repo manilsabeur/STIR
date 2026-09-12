@@ -75,6 +75,9 @@ protected:
   CuVec<float> d_weights_data;
   CuVec<elemT> d_kappa_data;
 
+  //! GPU copy of the gamma image (spatially-varying edge preservation). Empty when unused.
+  CuVec<elemT> d_gamma_data;
+
   // Buffers for GPU input/output to avoid reallocating memory on each call see usage in set_up() and ~CudaGibbsPenalty()
   mutable CuVec<double> d_scalar;
   // d_scalar is used for compute_value and compute_gradient_times_input as output variable
